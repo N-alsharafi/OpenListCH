@@ -43,7 +43,7 @@ func Init(e *gin.Engine) {
 	S3(g.Group("/s3"))
 
 	downloadLimiter := middlewares.DownloadRateLimiter(stream.ClientDownloadLimit)
-	quotaLimiter := middlewares.DownloadQuotaLimiter(10)
+	quotaLimiter := middlewares.DownloadQuotaLimiter(conf.Conf.DownloadQuotaLimit)
 	signCheck := middlewares.Down(sign.Verify)
 	g.GET("/d/*path", middlewares.PathParse, signCheck, downloadLimiter, quotaLimiter, handles.Down)
 	g.GET("/p/*path", middlewares.PathParse, signCheck, downloadLimiter, quotaLimiter, handles.Proxy)

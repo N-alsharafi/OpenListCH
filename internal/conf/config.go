@@ -132,6 +132,7 @@ type Config struct {
 	SFTP                  SFTP        `json:"sftp" envPrefix:"SFTP_"`
 	LastLaunchedVersion   string      `json:"last_launched_version"`
 	ProxyAddress          string      `json:"proxy_address" env:"PROXY_ADDRESS"`
+	DownloadQuotaLimit    int         `json:"download_quota_limit" env:"DOWNLOAD_QUOTA_LIMIT"`
 }
 
 func DefaultConfig(dataDir string) *Config {
@@ -246,5 +247,6 @@ func DefaultConfig(dataDir string) *Config {
 		},
 		LastLaunchedVersion: "",
 		ProxyAddress:        "",
+		DownloadQuotaLimit:  10,
 	}
 }

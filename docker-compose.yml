@@ -10,5 +10,6 @@ services:
     environment:
       - UMASK=022
       - TZ=Asia/Shanghai
+      - DOWNLOAD_QUOTA_LIMIT=20
     container_name: openlist
     image: 'openlist-quota:latest'
