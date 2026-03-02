@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -14,6 +15,9 @@ type QuotaData struct {
 
 // quotaCache stores download quotas with 24h TTL
 var quotaCache = cache.NewMemCache[*QuotaData](cache.WithShards[*QuotaData](16))
+
+// quotaMutex ensures atomic check-and-reserve operations
+var quotaMutex sync.Mutex
 
 // Default values
 const (
@@ -95,4 +99,80 @@ func Increment(connID string, count int) error {
 // GetWindowStart returns the start time of the sliding window
 func GetWindowStart() time.Time {
 	return time.Now().Add(-time.Duration(DefaultWindowHours) * time.Hour)
+}
+
+// CheckAndReserve atomically checks if quota is available and reserves it.
+// This prevents race conditions when multiple concurrent downloads occur.
+// Returns: allowed (bool), remaining (int), error
+func CheckAndReserve(connID string, count int, limit int) (bool, int, error) {
+	quotaMutex.Lock()
+	defer quotaMutex.Unlock()
+
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+
+	cutoff := time.Now().Add(-time.Duration(DefaultWindowHours) * time.Hour)
+
+	// Get current data
+	data, exists := quotaCache.Get(connID)
+	if !exists {
+		data = &QuotaData{Timestamps: make([]time.Time, 0, count)}
+	}
+
+	// Filter valid timestamps within the sliding window
+	valid := make([]time.Time, 0, len(data.Timestamps))
+	for _, ts := range data.Timestamps {
+		if ts.After(cutoff) {
+			valid = append(valid, ts)
+		}
+	}
+
+	remaining := limit - len(valid)
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	// Check if enough quota available
+	if remaining < count {
+		return false, remaining, nil
+	}
+
+	// Reserve quota by adding timestamps immediately
+	now := time.Now()
+	for i := 0; i < count; i++ {
+		valid = append(valid, now)
+	}
+
+	// Update cache with reserved quota
+	quotaCache.Set(connID, &QuotaData{Timestamps: valid},
+		cache.WithEx[*QuotaData](time.Duration(DefaultWindowHours)*time.Hour))
+
+	return true, remaining - count, nil
+}
+
+// Decrement removes count from quota (used for rollback when downloads fail)
+func Decrement(connID string, count int) error {
+	quotaMutex.Lock()
+	defer quotaMutex.Unlock()
+
+	if count <= 0 {
+		return nil
+	}
+
+	data, exists := quotaCache.Get(connID)
+	if !exists || len(data.Timestamps) == 0 {
+		return nil
+	}
+
+	// Remove the most recent 'count' timestamps
+	if count >= len(data.Timestamps) {
+		quotaCache.Del(connID)
+	} else {
+		data.Timestamps = data.Timestamps[:len(data.Timestamps)-count]
+		quotaCache.Set(connID, data,
+			cache.WithEx[*QuotaData](time.Duration(DefaultWindowHours)*time.Hour))
+	}
+
+	return nil
 }

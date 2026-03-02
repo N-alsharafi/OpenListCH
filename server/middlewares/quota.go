@@ -44,44 +44,41 @@ func DownloadQuotaLimiter(limit int) gin.HandlerFunc {
 			}
 		}
 
-		// Check remaining quota
-		remaining, err := quota.CheckRemaining(connID, limit)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"code":    500,
-				"message": "Error checking download quota",
-			})
-			return
-		}
+	// Atomically check and reserve quota
+	allowed, _, err := quota.CheckAndReserve(connID, rangeCount, limit)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Error checking download quota",
+		})
+		return
+	}
 
-		if remaining < rangeCount {
-			// Check if request is from a browser (expects HTML)
-			accept := c.Request.Header.Get("Accept")
-			isBrowser := strings.Contains(accept, "text/html") && !strings.Contains(accept, "application/json")
-			
-			if isBrowser {
-				// Return HTML error page for browsers
-				c.Header("Content-Type", "text/html; charset=utf-8")
-				c.AbortWithStatus(http.StatusTooManyRequests)
-				c.Writer.WriteString(generateQuotaErrorHTML(limit))
-			} else {
-				// Return JSON for API clients
-				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-					"code":    429,
-					"message": "Download quota exceeded. You can download up to " + strconv.Itoa(limit) + " files per 24 hours. Please login to continue.",
-				})
-			}
-			return
+	if !allowed {
+		// Check if request is from a browser (expects HTML)
+		accept := c.Request.Header.Get("Accept")
+		isBrowser := strings.Contains(accept, "text/html") && !strings.Contains(accept, "application/json")
+		
+		if isBrowser {
+			// Return HTML error page for browsers
+			c.Header("Content-Type", "text/html; charset=utf-8")
+			c.AbortWithStatus(http.StatusTooManyRequests)
+			c.Writer.WriteString(generateQuotaErrorHTML(limit))
+		} else {
+			// Return empty body for API clients to prevent broken zip files
+			c.AbortWithStatus(http.StatusTooManyRequests)
 		}
+		return
+	}
 
-		// Process the request
-		c.Next()
+	// Process the request (quota already reserved)
+	c.Next()
 
-		// Only increment quota on successful responses
-		status := c.Writer.Status()
-		if status >= 200 && status < 300 {
-			quota.Increment(connID, rangeCount)
-		}
+	// If request fails, rollback the quota reservation
+	status := c.Writer.Status()
+	if status < 200 || status >= 300 {
+		quota.Decrement(connID, rangeCount)
+	}
 	}
 }
 
