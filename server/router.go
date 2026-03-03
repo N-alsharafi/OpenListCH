@@ -45,7 +45,8 @@ func Init(e *gin.Engine) {
 	downloadLimiter := middlewares.DownloadRateLimiter(stream.ClientDownloadLimit)
 	quotaLimiter := middlewares.DownloadQuotaLimiter(conf.Conf.DownloadQuotaLimit)
 	signCheck := middlewares.Down(sign.Verify)
-	g.GET("/d/*path", middlewares.PathParse, signCheck, downloadLimiter, quotaLimiter, handles.Down)
+	// Note: /d uses checkDownloadQuota in Down handler (counts files in ZIP), so no quotaLimiter middleware
+	g.GET("/d/*path", middlewares.PathParse, signCheck, downloadLimiter, handles.Down)
 	g.GET("/p/*path", middlewares.PathParse, signCheck, downloadLimiter, quotaLimiter, handles.Proxy)
 	g.HEAD("/d/*path", middlewares.PathParse, signCheck, handles.Down)
 	g.HEAD("/p/*path", middlewares.PathParse, signCheck, handles.Proxy)
