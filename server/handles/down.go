@@ -38,7 +38,7 @@ func Down(c *gin.Context) {
 		return
 	} else {
 		// Check quota before generating redirect URL for S3/direct storage
-		if !checkDownloadQuota(c, 10) {
+		if !checkDownloadQuota(c, conf.Conf.DownloadQuotaLimit) {
 			return // Quota exceeded, error already sent
 		}
 
@@ -50,7 +50,7 @@ func Down(c *gin.Context) {
 		})
 		if err != nil {
 			// Rollback quota on error
-			rollbackDownloadQuota(c, 10)
+			rollbackDownloadQuota(c, conf.Conf.DownloadQuotaLimit)
 			common.ErrorPage(c, err, 500)
 			return
 		}
