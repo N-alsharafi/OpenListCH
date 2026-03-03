@@ -2,7 +2,9 @@ package handles
 
 import (
 	"fmt"
+	"net/http"
 	stdpath "path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/quota"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/internal/sign"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -313,6 +316,69 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 	if !ok && err == nil {
 		provider = storage.Config().Name
 	}
+
+	// Check quota for anonymous users downloading files
+	if !obj.IsDir() && user.IsGuest() {
+		ip := c.ClientIP()
+		userAgent := c.Request.UserAgent()
+		acceptLang := c.Request.Header.Get("Accept-Language")
+		connID := quota.GetConnectionID(ip, userAgent, acceptLang)
+
+		// Determine if this will be a direct download (bypasses middleware)
+		// Direct downloads need quota increment here, proxied downloads handled by middleware
+		willBypassMiddleware := !storage.Config().MustProxy() && !storage.GetStorage().WebProxy
+
+		if willBypassMiddleware {
+			// For direct downloads (S3, etc), check AND reserve quota here
+			// This is the only place quota gets incremented for direct downloads
+			allowed, _, err := quota.CheckAndReserve(connID, 1, conf.Conf.DownloadQuotaLimit)
+			if err != nil {
+				common.ErrorResp(c, err, 500)
+				return
+			}
+
+			if !allowed {
+				// Return error response
+				accept := c.Request.Header.Get("Accept")
+				isBrowser := strings.Contains(accept, "text/html")
+
+				if isBrowser {
+					c.Header("Content-Type", "text/html; charset=utf-8")
+					c.Status(http.StatusTooManyRequests)
+					c.Writer.WriteString(generateQuotaErrorHTML(conf.Conf.DownloadQuotaLimit))
+				} else {
+					common.ErrorResp(c, errors.New("Download quota exceeded. You can download up to "+
+						strconv.Itoa(conf.Conf.DownloadQuotaLimit)+" files per 24 hours. Please login to continue."), 429)
+				}
+				return
+			}
+		} else {
+			// For proxied downloads (/p endpoint), only check quota here
+			// Middleware will handle the increment when user actually downloads
+			remaining, err := quota.CheckRemaining(connID, conf.Conf.DownloadQuotaLimit)
+			if err != nil {
+				common.ErrorResp(c, err, 500)
+				return
+			}
+
+			if remaining < 1 {
+				// Return error response
+				accept := c.Request.Header.Get("Accept")
+				isBrowser := strings.Contains(accept, "text/html")
+
+				if isBrowser {
+					c.Header("Content-Type", "text/html; charset=utf-8")
+					c.Status(http.StatusTooManyRequests)
+					c.Writer.WriteString(generateQuotaErrorHTML(conf.Conf.DownloadQuotaLimit))
+				} else {
+					common.ErrorResp(c, errors.New("Download quota exceeded. You can download up to "+
+						strconv.Itoa(conf.Conf.DownloadQuotaLimit)+" files per 24 hours. Please login to continue."), 429)
+				}
+				return
+			}
+		}
+	}
+
 	if !obj.IsDir() {
 		if err != nil {
 			common.ErrorResp(c, err, 500)
